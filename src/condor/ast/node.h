@@ -43,7 +43,7 @@ namespace internal{
 		int progressDepth;
 		int importScopeId;
 		std::vector<TOKEN> visibility;
-		std::vector<ASTLiteral*> locals;
+		std::vector<ASTLiteral*> locals; // used for recursion
 		void AddLocal(ASTLiteral* l) {locals.push_back(l);}
 		ASTLiteral* GetLocal(bool pop = true);
 		int GetTotalLocals(){return (int) locals.size();}
@@ -59,8 +59,11 @@ namespace internal{
 	{
 	public:
 		static ASTToken* New(Isolate* iso, TOKEN tok);
+		~ASTToken();
 		Token* value;
 		int Precedence(){return value->Precedence();}
+	private:
+		Isolate* iso;
 	};
 
 	class ASTImport : public ASTNode

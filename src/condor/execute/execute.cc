@@ -50,6 +50,12 @@ namespace internal{
 		col = node->col;
 	}
 
+	void Execute::CloseStack(){
+		RPNStack* s = stack[0];
+		isolate->FreeMemory(s, sizeof(RPNStack));
+		stack.erase(stack.begin());
+	}
+
 	void Execute::OpenScope(Scope* sc){
 		PrintStep("Opening Scope");
 		CHECK(sc != NULL);
@@ -62,13 +68,14 @@ namespace internal{
 		CHECK(scopes.size() != 0);
 		Scope* scope = GetCurrentScope();
 		if (scope == NULL || scope->Size() == 0) return; // nothing to evaluate
+		ASTNode* trash = NULL;
 		for (int i = 0; i < scope->Size(); i++){
 			ASTNode* node = scope->Get(i);
 			TRACK(node);
 			int type = (int) node->type;
 			switch (type){
-				case FUNC_CALL: EvaluateFuncCall((ASTFuncCall*) node); break;
-				case BINARY: EvaluateBinary((ASTBinaryExpr*) node); break;
+				case FUNC_CALL: trash = EvaluateFuncCall((ASTFuncCall*) node); break;
+				case BINARY: trash = EvaluateBinary((ASTBinaryExpr*) node); break;
 				case VAR: EvaluateVar((ASTVar*) node); break;
 				case FOR: EvaluateFor((ASTForExpr*) node); break;
 				case WHILE: EvaluateWhile((ASTWhileExpr*) node); break;
@@ -83,6 +90,7 @@ namespace internal{
 				// case FUNC: case OBJECT don't need to be executed, the only need to be called
 			}
 			if (isReturning || isContinue) break;
+			if (trash != NULL) trash->Free(isolate); // GC
 		}
 		CloseScope();
 	}
@@ -128,7 +136,8 @@ namespace internal{
 					SetLitType(lit);
 					FormatLit(lit);
 					if (lit == NULL) func->args[i]->AddLocal(ASTUndefined::New(isolate));
-					else func->args[i]->AddLocal(lit->Clone(isolate));
+					else if (lit == call->params[i]) func->args[i]->AddLocal(lit->Clone(isolate));
+					else func->args[i]->AddLocal(lit);
 					isolate->RunGC(call->params[i], false);
 				}
 				else{
@@ -186,11 +195,12 @@ namespace internal{
 			else{
 				PrintStep("Calculation");
 				NewStack();
-				FillPostix(binary);				
+				FillPostix(binary);			
 				ASTLiteral* lit = Calculate();
 				FormatLit(lit);
 				CloseStack();
 				if (binary->print) printf("%s\n", lit->value.c_str());
+				tok->Free(isolate);
 				return lit;
 			}
 		}
@@ -198,6 +208,7 @@ namespace internal{
 
 	void Execute::SetCast(ASTExpr* expr, ASTLiteral* value){
 		if (value == NULL) return;
+		CHECK(expr != NULL);
 		TRACK(value);
 		TRACK(expr);
 		if (expr->cast != NULL){
@@ -358,6 +369,8 @@ namespace internal{
 					else if (rpnStack) printf("[%d] - [%d, %d, %d] = [Object]\n",i,  i - 2, i - 1, i);
 				}
 				else throw Error::INVALID_OBJECT;
+				// free the Token, otherwise it eats the memory
+				tok->Free(isolate);
 			}
 			else if (n->type == LITERAL){
 				ASTLiteral* lit = NULL;
@@ -469,7 +482,7 @@ namespace internal{
 		else if (litType == BOOLEAN){
 			litType = Binary::Compare(first->litType, second->litType, ADD);
 		}
-		SetCalc(first); // Bug fix where this wasn't set
+		SetCalc(first); 
 		SetCalc(second);
 		
 		switch (litType){
@@ -604,8 +617,14 @@ namespace internal{
 	void Execute::SetCalc(ASTLiteral* lit){
 		if (lit == NULL) return;
 		TRACK(lit);
-		if (!lit->isCalc && lit->value.length() != 0 && (lit->litType == INT || lit->litType == DOUBLE || 
-											 lit->litType == FLOAT || lit->litType == TRUE_LITERAL || lit->litType == FALSE_LITERAL)) {
+		if (!lit->isCalc && 
+			lit->value.length() != 0 && 
+				(lit->litType == INT || 
+				 lit->litType == DOUBLE || 
+				 lit->litType == FLOAT || 
+				 lit->litType == TRUE_LITERAL || 
+				 lit->litType == FALSE_LITERAL)) {
+
 			PrintStep("Set the calculated value (" + lit->value + " | " + Token::ToString(lit->litType) + ")");
 			try{
 				if (lit->litType != TRUE_LITERAL && lit->litType != FALSE_LITERAL) lit->calc = std::stod(lit->value);
@@ -737,7 +756,7 @@ namespace internal{
 		if (var->name == "return") {
 			isReturning = true;
 			returnValue = var;
-			var->allowGC = false;
+			var->allowGC = false; 
 		}
 		isolate->RunGC(local, true);
 		return local;
@@ -754,6 +773,7 @@ namespace internal{
 		OpenScope(expr->scope);
 		int i = 0;
 		while (true){
+			if (expr->scope->Size() == 0) break;
 			i++;
 			ASTLiteral* condition = EvaluateValue(expr->condition);
 			bool pass = condition->value == "true";
